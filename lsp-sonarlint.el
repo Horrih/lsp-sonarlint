@@ -52,6 +52,7 @@
             ('windows-nt "-win32-x64")))
   "Official SonarLint VSCode extension (vsix).
 It contains the necessary language server and analyzers."
+  :group 'lsp-sonarlint
   :type 'string)
 
 (defcustom lsp-sonarlint-download-dir
@@ -311,14 +312,44 @@ See `lsp-sonarlint-analyze-folder' to see which files are ignored."
                         ("filePath" file)))
                      utf8-filenames))))))
 
+(defcustom lsp-sonarlint-connected-mode-credentials
+  nil
+  "Connection credentials for sonarlint's connected mode.
+If nil, sonarlint will work in local mode.
+If specified, sonarlint will connect to the sonar instance and fetch additional
+data, e.g disabled rules or occurences marked as won't fix/false positives.
+
+Typically (:url \"https://mysonarinstance\" :project-key \"my-project-key\"
+:token \"my-login-token\")
+"
+:group 'lsp-sonarlint
+:type '(plist :value-type string))
+
 (defvar lsp-sonarlint--action-handlers '())
 
+(defun lsp-sonarlint--connected-settings()
+  (when lsp-sonarlint-connected-mode-credentials
+    (lsp-ht
+     ("servers" (vector))
+     ("connections"
+      (lsp-ht
+       ("sonarqube"
+        (vector
+         (lsp-ht
+          ("serverUrl" (plist-get lsp-sonarlint-connected-mode-credentials :url))
+          ("connectionId" "Sonarqube"))))))
+     ("project"
+      (lsp-ht
+       ("connectionId" "Sonarqube")
+       ("projectKey" (plist-get lsp-sonarlint-connected-mode-credentials :project-key)))))))
+
 (lsp-register-custom-settings
- '(("sonarlint.disableTelemetry" lsp-sonarlint-disable-telemetry)
+ `(("sonarlint.disableTelemetry" lsp-sonarlint-disable-telemetry)
    ("sonarlint.testFilePattern" lsp-sonarlint-test-file-pattern)
    ("sonarlint.pathToCompileCommands" lsp-sonarlint-cfamily-compile-commands-path)
    ("sonarlint.output.showAnalyzerLogs" lsp-sonarlint-show-analyzer-logs)
    ("sonarlint.output.verboseLogs" lsp-sonarlint-verbose-logs)
+   ("sonarlint.connectedMode" ,(lsp-sonarlint--connected-settings))
    ("sonarlint.ls.vmargs" lsp-sonarlint-vmargs)))
 
 (defvar lsp-sonarlint--request-handlers
@@ -346,6 +377,9 @@ See `lsp-sonarlint-analyze-folder' to see which files are ignored."
    ;; Probably safe to assume as a first step that you don't care, and want your diagnostics.
    ;; TODO: implement a proper check here.
    ("sonarlint/isIgnoredByScm" #'ignore)
+   ;; Connection token when using connected mode
+   ("sonarlint/getTokenForServer" (lambda (&rest _)
+                                    (plist-get lsp-sonarlint-connected-mode-credentials :token)))
    ;; Probably only relevant to the java analyzer.
    ;; Some additional java configuration for the project.
    ;; TODO: implement
@@ -354,6 +388,11 @@ See `lsp-sonarlint-analyze-folder' to see which files are ignored."
   "SonarLint-specific request handlers.
 See REQUEST-HANDLERS in lsp--client in lsp-mode."
   )
+
+(defun lsp-sonarlint--connection-result(_ params)
+  (if (ht-get params "success")
+      (message "Sonarlint - Connected mode - Connection succeeded!")
+    (message "Sonarlint - Connected mode - Connection error : '%s'" (ht-get params "reason"))))
 
 (defvar lsp-sonarlint--notification-handlers
   (lsp-ht
@@ -368,6 +407,13 @@ See REQUEST-HANDLERS in lsp--client in lsp-mode."
    ;; Sonarlint sends this to suggest the connected mode, and sends along
    ;; your previous sonar projects. Connected mode is not currently implemented here.
    ("sonarlint/suggestConnection" #'ignore)
+   ;; In connected mode, sonarlint reports for each project the reference branch name configured.
+   ;; Not sure what to do with that ?
+   ("sonarlint/setReferenceBranchNameForFolder" #'ignore)
+   ;; In connected mode, sonarlint reports a timestamp to distinguish old and new code.
+   ;; Not sure what we should do about it.
+   ("sonarlint/submitNewCodeDefinition" #'ignore)
+   ("sonarlint/reportConnectionCheckResult" #'lsp-sonarlint--connection-result)
    ;; Not sure what this is for. Testing of SonarLint itself?
    ("sonarlint/readyForTests" #'ignore)
    ;; Sent by cfamily for analysis of C/C++ files. Sonar requires your
